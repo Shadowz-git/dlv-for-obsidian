@@ -5,7 +5,7 @@ import {
 	Setting,
 	Notice,
 	MarkdownPostProcessorContext,
-	TFile
+	TFile, DropdownComponent
 
 } from "obsidian";
 import { exec } from "child_process";
@@ -19,7 +19,10 @@ import * as os from "os";
 const execAsync = promisify(exec);
 
 interface DlvPluginSettings {
-	dlvPath: string;
+	dlvLocationType: "absolute" | "relative";
+	absolutePath: string;
+	relativeExecutable: string;
+	availableExecutables: string[];
 	customExtensions: string;
 	showErrors: boolean;
 	showAllModels: boolean;
@@ -28,7 +31,10 @@ interface DlvPluginSettings {
 }
 
 const DEFAULT_SETTINGS: DlvPluginSettings = {
-	dlvPath: "",
+	dlvLocationType: "relative",
+	absolutePath: "",
+	relativeExecutable: "executables/dlv.exe",
+	availableExecutables: [],
 	customExtensions: "asp",
 	showErrors: false,
 	showAllModels: false,
@@ -88,8 +94,10 @@ class CodeBlockWidget extends WidgetType {
 export default class DlvPlugin extends Plugin {
 	settings: DlvPluginSettings;
 	private stylesEl: HTMLStyleElement;
+	pluginPath: string;
 
 	async onload() {
+		await this.initializePluginPath();
 		await this.loadSettings();
 		this.addStyle();
 		this.registerEditorExtension(this.getEditorDecoration());
@@ -131,9 +139,28 @@ export default class DlvPlugin extends Plugin {
                 position: relative;
             }
             .dlv-error {
-            	color: #ff5555;
-            	margin-top: 0.5rem;
-        	}
+				background: var(--background-secondary);
+				padding: 0.5rem;
+				border-radius: 4px;
+				margin-top: 0.5rem;
+				border-left: 3px solid #ff5555;
+			}
+			
+			.error-icon {
+				margin-right: 0.5rem;
+				color: #ff5555;
+			}
+			
+			.error-content {
+				display: inline-block;
+				vertical-align: middle;
+			}
+			
+			.error-line {
+				margin: 0.25rem 0;
+				font-family: var(--font-monospace);
+				font-size: 0.9em;
+			}
             .dlv-buttons {
                 display: flex;
                 gap: 0.5rem;
@@ -201,45 +228,52 @@ export default class DlvPlugin extends Plugin {
 		return btn;
 	}
 
-	async executeDlv(content: string, lang: string) {
-		if (!this.settings.dlvPath) {
-			throw new Error("Percorso di DLV non configurato!");
-		}
-
-		const tmpDir = os.tmpdir();
-		const tmpFile = path.join(tmpDir, `dlv-temp-${Date.now()}.${lang}`);
-		await fs.writeFile(tmpFile, content, "utf8");
-
-		const argsArr = [tmpFile];
-
-		if (this.settings.showAllModels) {
-			argsArr.push("-n", "0");
-		}
-		if (this.settings.hideFacts) {
-			argsArr.push("--no-facts");
-		}
-
+	async executeDlv(content: string, lang: string): Promise<{ stdout: string; stderr: string }> {
 		try {
+			// 1. Verifica esistenza file DLV
+			const dlvPath = this.getDlvPath();
+			await fs.access(dlvPath); // Lancia errore se non esiste
+
+			// 2. Crea file temporaneo
+			const tmpDir = os.tmpdir();
+			await fs.mkdir(tmpDir, { recursive: true }); // Crea la cartella se non esiste
+
+			const tmpFile = path.join(tmpDir, `dlv-temp-${Date.now()}.${lang}`);
+			await fs.writeFile(tmpFile, content, "utf8"); // Scrive il codice in un file temporaneo
+
+			// 3. Esegui DLV
+			const args = [tmpFile];
+			if (this.settings.showAllModels) args.push("-n", "0");
+			if (this.settings.hideFacts) args.push("--no-facts");
+
 			const { stdout, stderr } = await execAsync(
-				`"${this.settings.dlvPath}" ${argsArr.map(arg => `"${arg}"`).join(" ")}`,
-				{ shell: process.platform === "win32" ? "cmd.exe" : undefined }
+				`"${dlvPath}" ${args.map(arg => `"${arg}"`).join(" ")}`,
+				{
+					shell: process.platform === "win32" ? "cmd.exe" : undefined,
+					windowsHide: true,
+					encoding: 'utf-8'
+				}
 			);
 
-			// Pulizia degli output
-			const cleanedStdout = this.cleanOutput(stdout);
-			const cleanedStderr = this.cleanErrors(stderr);
+			// 4. Pulizia file temporaneo
+			await fs.unlink(tmpFile).catch(() => {}); // Elimina il file temporaneo
 
 			return {
-				stdout: cleanedStdout,
-				stderr: cleanedStderr
+				stdout: this.cleanOutput(stdout),
+				stderr: this.cleanErrors(stderr)
 			};
 		} catch (error) {
+			// Gestione errori centralizzata
+			let errorMessage = "Errore sconosciuto";
+			if (error instanceof Error) {
+				errorMessage = error.message;
+				console.error("Errore executeDlv:", error);
+			}
+
 			return {
 				stdout: "",
-				stderr: error instanceof Error ? this.cleanErrors(error.message) : "Errore sconosciuto"
+				stderr: errorMessage
 			};
-		} finally {
-			await fs.unlink(tmpFile).catch(() => {});
 		}
 	}
 
@@ -250,10 +284,48 @@ export default class DlvPlugin extends Plugin {
 			.trim();
 	}
 
-	private cleanErrors(errorOutput: string) {
-		return errorOutput
-			.replace(/Generic warning: .*\n?/g, "")  // Filtra i warning generici
+	private cleanErrors(errorOutput: string): string {
+		// Split in linee e filtra
+		const lines = errorOutput.split('\n')
+			.map(line => {
+				// 1. Rimuovi interi percorsi file
+				line = line.replace(/([A-Za-z]:\\[^\s]+|\/[^\s]+)/g, '')
+					.replace(/(dlv-temp-\d+\.asp)/gi, 'Input');
+
+				// 2. Estrai solo la parte dopo "line X:"
+				const errorMatch = line.match(/(line \d+):\s*(.*)/i);
+				if (errorMatch) {
+					return `${errorMatch[1]}: ${errorMatch[2].replace(/^.*?:\s*/, '')}`;
+				}
+
+				// 3. Rimuovi righe non rilevanti
+				return line.includes('Command failed:') ||
+				line.includes('Aborting due to') ? '' : line;
+			})
+			.filter(line => line.trim().length > 0);
+
+		// 4. Unisci e formatta
+		return lines.join('\n')
+			.replace(/(line \d+):/gi, 'Errore:\n$1')
+			.replace(/[.:]+$/, '') // Rimuovi punti finali
 			.trim();
+	}
+
+	private formatErrorMessages(errorString: string) {
+		return errorString
+			.split('\n')
+			.map(line => {
+				// Estrai numero linea e messaggio
+				const match = line.match(/Linea (\d+):\s*(.*)/i);
+				if (match) {
+					return `<div class="error-line">
+                    <span class="error-line-number">Linea ${match[1]}:</span>
+                    <span class="error-message">${match[2]}</span>
+                </div>`;
+				}
+				return line ? `<div class="error-general">${line}</div>` : '';
+			})
+			.join('');
 	}
 
 	updateOutputUI(outputEl: HTMLElement, copyBtn: HTMLButtonElement, result: { stdout: string; stderr: string }) {
@@ -261,9 +333,14 @@ export default class DlvPlugin extends Plugin {
 		outputEl.style.display = "block";
 
 		if (this.settings.showErrors && result.stderr) {
+			const errorContent = this.cleanErrors(result.stderr)
+				.split('\n')
+				.map(line => `<div class="error-line"><b>${line.split(':')[0]}:</b> ${line.split(':').slice(1).join(':')}</div>`)
+				.join('');
+
 			const errorEl = document.createElement("div");
 			errorEl.className = "dlv-error";
-			errorEl.innerHTML = result.stderr.replace(/\n/g, "<br>");
+			errorEl.innerHTML = `<pre>${errorContent}</pre>`;
 			outputEl.appendChild(errorEl);
 		}
 
@@ -294,6 +371,7 @@ export default class DlvPlugin extends Plugin {
 			new Notice("Risultato salvato nel file!");
 		}
 	}
+
 	copyToClipboard(text: string) {
 		navigator.clipboard.writeText(text).then(() => new Notice("Copied to clipboard"));
 	}
@@ -427,11 +505,93 @@ export default class DlvPlugin extends Plugin {
 		});
 	}
 
+	private async initializePluginPath() {
+		try {
+			// Ottieni il percorso base corretto della vault
+			const vaultPath = (this.app.vault.adapter as any).basePath; // <-- Modifica qui
+
+			// Costruisci il percorso del plugin correttamente
+			if (this.manifest.dir != null) {
+				this.pluginPath = path.join(
+					vaultPath,
+					this.manifest.dir
+				);
+			}
+
+			// Debug
+			console.log("Percorso corretto del plugin:", this.pluginPath);
+
+			await fs.mkdir(this.pluginPath, { recursive: true });
+
+		} catch (error) {
+			console.error("Errore inizializzazione plugin:", error);
+			throw new Error("Configurazione plugin non valida");
+		}
+	}
+
+	async refreshExecutablesList() {
+		if (this.settings.dlvLocationType === "relative") {
+			// 5. Percorso eseguibili corretto
+			const executablesPath = path.join(this.pluginPath, "executables");
+			console.log("Percorso eseguibili:", executablesPath);
+
+			try {
+				const files = await fs.readdir(executablesPath);
+				this.settings.availableExecutables = files
+					.filter(f => f.toLowerCase().includes('dlv'))
+					.map(f => path.join('executables', f));
+
+				console.log("Eseguibili trovati:", this.settings.availableExecutables);
+
+			} catch (error) {
+				console.error("Errore scansione eseguibili:", error);
+			}
+		}
+	}
+
+	private isValidExecutable(filename: string): boolean {
+		// Verifica per Windows
+		if (process.platform === 'win32') {
+			return filename.toLowerCase().endsWith('.exe');
+		}
+
+		// Verifica per Linux/Mac (controllo pattern nome)
+		return /^dlv[-_]?(linux|mac|.*)/i.test(filename);
+	}
+
+	private getDlvPath() {
+		if (this.settings.dlvLocationType === "absolute") {
+			return this.settings.absolutePath;
+		}
+
+		// 4. Costruzione percorso relativo corretta
+		return path.join(
+			this.pluginPath,
+			this.settings.relativeExecutable
+		);
+	}
+
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		await this.refreshExecutablesList();
 	}
 
 	async saveSettings() {
+		// Validazione rinforzata
+		if (this.settings.dlvLocationType === 'relative') {
+			const fullPath = path.join(this.pluginPath, this.settings.relativeExecutable);
+
+			if (!await fs.access(fullPath).then(() => true).catch(() => false)) {
+				new Notice('⚠️ Eseguibile non trovato nel percorso relativo!');
+				return;
+			}
+		} else {
+			if (!await fs.access(this.settings.absolutePath).then(() => true).catch(() => false)) {
+				new Notice('⚠️ Percorso assoluto non valido!');
+				return;
+			}
+		}
+
 		await this.saveData(this.settings);
 	}
 
@@ -442,66 +602,132 @@ export default class DlvPlugin extends Plugin {
 
 class DlvSettingTab extends PluginSettingTab {
 	plugin: DlvPlugin;
+	private typeDropdown: DropdownComponent;
+	private absoluteSetting: Setting;
+	private relativeSetting: Setting;
 
 	constructor(app: App, plugin: DlvPlugin) {
 		super(app, plugin);
 		this.plugin = plugin;
 	}
 
-	display() {
+	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		containerEl.createEl('h2', { text: 'DLV Plugin Settings' });
 
-		containerEl.createEl('h2', { text: 'DLV Settings' });
-
+		// Tipo di installazione
 		new Setting(containerEl)
-			.setName('DLV Path')
-			.setDesc('Path to DLV executable')
+			.setName('Installation Type')
+			.setDesc('Select DLV executable location type')
+			.addDropdown(dropdown => {
+				this.typeDropdown = dropdown
+					.addOption('absolute', 'Absolute Path')
+					.addOption('relative', 'Relative to Plugin')
+					.setValue(this.plugin.settings.dlvLocationType)
+					.onChange(async (value) => {
+						this.plugin.settings.dlvLocationType = value as "absolute" | "relative";
+						await this.plugin.refreshExecutablesList();
+						this.updateSettingsVisibility();
+						await this.plugin.saveSettings();
+					});
+			});
+
+		// Percorso assoluto
+		this.absoluteSetting = new Setting(containerEl)
+			.setName('Absolute Path')
+			.setDesc('Full path to DLV executable (e.g. C:/dlv/dlv.exe)')
 			.addText(text => text
-				.setValue(this.plugin.settings.dlvPath)
-				.onChange(v => {
-					this.plugin.settings.dlvPath = v;
-					this.plugin.saveSettings();
+				.setValue(this.plugin.settings.absolutePath)
+				.onChange(async (value) => {
+					this.plugin.settings.absolutePath = value;
+					await this.plugin.saveSettings();
 				}));
 
+		// Percorso relativo
+		this.relativeSetting = new Setting(containerEl)
+			.setName('Plugin Executable')
+			.setDesc('Select executable from plugin folder')
+			.addDropdown(dropdown => {
+				this.plugin.settings.availableExecutables.forEach(exe => {
+					dropdown.addOption(exe, exe.split('/').pop() || exe);
+				});
+				dropdown
+					.setValue(this.plugin.settings.relativeExecutable)
+					.onChange(async (value) => {
+						this.plugin.settings.relativeExecutable = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		// Altre impostazioni
 		new Setting(containerEl)
-			.setName('Supported Extensions')
-			.setDesc('Comma-separated list of file extensions')
+			.setName('Supported File Extensions')
+			.setDesc('Comma-separated list (e.g. asp,dlv,prolog)')
 			.addText(text => text
 				.setValue(this.plugin.settings.customExtensions)
-				.onChange(v => {
-					this.plugin.settings.customExtensions = v;
-					this.plugin.saveSettings();
+				.onChange(async (value) => {
+					this.plugin.settings.customExtensions = value;
+					await this.plugin.saveSettings();
 				}));
 
 		new Setting(containerEl)
-			.setName('Mostra tutti i modelli')
-			.setDesc('Abilita il flag -n 0 per visualizzare tutti i modelli')
+			.setName('Show All Models')
+			.setDesc('Enable -n 0 flag to show all answer sets')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.showAllModels)
-				.onChange(v => {
-					this.plugin.settings.showAllModels = v;
-					this.plugin.saveSettings();
+				.onChange(async (value) => {
+					this.plugin.settings.showAllModels = value;
+					await this.plugin.saveSettings();
 				}));
 
 		new Setting(containerEl)
-			.setName('Nascondi fatti')
-			.setDesc('Abilita il flag --no-facts per nascondere i fatti')
+			.setName('Hide Facts')
+			.setDesc('Enable --no-facts flag to hide facts')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.hideFacts)
-				.onChange(v => {
-					this.plugin.settings.hideFacts = v;
-					this.plugin.saveSettings();
+				.onChange(async (value) => {
+					this.plugin.settings.hideFacts = value;
+					await this.plugin.saveSettings();
 				}));
 
 		new Setting(containerEl)
-			.setName('Show Errors')
-			.setDesc('Display error messages in output')
+			.setName('Error Handling')
+			.setDesc('Show error messages in output')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.showErrors)
-				.onChange(v => {
-					this.plugin.settings.showErrors = v;
-					this.plugin.saveSettings();
+				.onChange(async (value) => {
+					this.plugin.settings.showErrors = value;
+					await this.plugin.saveSettings();
 				}));
+
+		this.updateSettingsVisibility();
+	}
+
+	private updateSettingsVisibility(): void {
+		const isAbsolute = this.plugin.settings.dlvLocationType === "absolute";
+
+		this.absoluteSetting.settingEl.style.display = isAbsolute ? "" : "none";
+		this.relativeSetting.settingEl.style.display = isAbsolute ? "none" : "";
+
+		// Aggiorna la lista nel dropdown
+		const dropdown = this.relativeSetting.controlEl.querySelector('select');
+		if (dropdown) {
+			dropdown.innerHTML = this.plugin.settings.availableExecutables
+				.map(exe => `<option value="${exe}">${path.basename(exe)}</option>`)
+				.join('');
+		}
+
+		// Messaggio dettagliato
+		const basePath = path.join(this.plugin.pluginPath, 'executables');
+		const fileList = this.plugin.settings.availableExecutables
+			.map(exe => `• ${path.basename(exe)}`)
+			.join('\n');
+
+		this.relativeSetting.descEl.innerHTML = `
+            Percorso scannerizzato: <code>${basePath}</code><br>
+            File trovati: ${this.plugin.settings.availableExecutables.length}
+            <pre style="margin-top:5px">${fileList || 'Nessun file valido trovato'}</pre>
+        `;
 	}
 }
