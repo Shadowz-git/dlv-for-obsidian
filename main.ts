@@ -9,13 +9,13 @@ import {
 
 } from "obsidian";
 import { exec } from "child_process";
-import { promisify } from "util";
 import { RangeSetBuilder } from "@codemirror/state";
 import {Decoration, EditorView, WidgetType} from "@codemirror/view";
 import * as path from "path";
 import { promises as fs } from "fs";
 import * as os from "os";
-
+import {ChildProcess} from "child_process";
+import { promisify } from "util";
 const execAsync = promisify(exec);
 
 interface DlvPluginSettings {
@@ -23,6 +23,7 @@ interface DlvPluginSettings {
 	absolutePath: string;
 	relativeExecutable: string;
 	availableExecutables: string[];
+	executionTimeout: number; // in millisecondi
 	customExtensions: string;
 	showErrors: boolean;
 	showAllModels: boolean;
@@ -35,6 +36,7 @@ const DEFAULT_SETTINGS: DlvPluginSettings = {
 	absolutePath: "",
 	relativeExecutable: "executables/dlv.exe",
 	availableExecutables: [],
+	executionTimeout: 0,
 	customExtensions: "asp",
 	showErrors: false,
 	showAllModels: false,
@@ -43,6 +45,8 @@ const DEFAULT_SETTINGS: DlvPluginSettings = {
 };
 
 class CodeBlockWidget extends WidgetType {
+	private abortController: AbortController | null = null;
+
 	constructor(
 		private plugin: DlvPlugin,
 		private lang: string,
@@ -55,26 +59,49 @@ class CodeBlockWidget extends WidgetType {
 		const { header, outputPre, copyBtn } = this.plugin.createCodeBlockUI(this.lang);
 		const runBtn = header.querySelector('.run-btn') as HTMLButtonElement;
 		const saveBtn = header.querySelector('.save-btn') as HTMLButtonElement;
+		const stopBtn = header.querySelector('.stop-btn') as HTMLButtonElement;
+
+		const toggleButtons = (running: boolean) => {
+			runBtn.disabled = running;
+			saveBtn.disabled = running;
+			stopBtn.style.display = running ? 'block' : 'none';
+			(runBtn.querySelector('.btn-text') as HTMLElement).textContent = running ? 'Running' : '▶ Run';
+			runBtn.classList.toggle('running', running);
+		};
 
 		runBtn.onclick = async () => {
-			runBtn.disabled = true;
+			toggleButtons(true);
+			this.abortController = new AbortController();
+
 			try {
 				const codeContent = this.docText.slice(this.start, this.end).trim();
-				const result = await this.plugin.executeDlv(codeContent, this.lang);
+				const result = await this.plugin.executeDlv(
+					codeContent,
+					this.lang,
+					this.abortController.signal
+				);
 				this.plugin.updateOutputUI(outputPre, copyBtn, result);
 			} finally {
-				runBtn.disabled = false;
+				toggleButtons(false);
+				this.abortController = null;
+			}
+		};
+
+		stopBtn.onclick = () => {
+			if (this.abortController) {
+				this.abortController.abort();
+				toggleButtons(false);
 			}
 		};
 
 		saveBtn.onclick = async () => {
-			saveBtn.disabled = true;
+			toggleButtons(true);
 			try {
 				const codeContent = this.docText.slice(this.start, this.end).trim();
 				const result = await this.plugin.executeDlv(codeContent, this.lang);
 				await this.plugin.saveExecutionResult(result);
 			} finally {
-				saveBtn.disabled = false;
+				toggleButtons(false);
 			}
 		};
 
@@ -95,6 +122,7 @@ export default class DlvPlugin extends Plugin {
 	settings: DlvPluginSettings;
 	private stylesEl: HTMLStyleElement;
 	pluginPath: string;
+	private activeAbortControllers: Set<AbortController> = new Set();
 
 	async onload() {
 		await this.initializePluginPath();
@@ -139,60 +167,76 @@ export default class DlvPlugin extends Plugin {
                 position: relative;
             }
             .dlv-error {
-				background: var(--background-secondary);
-				padding: 0.5rem;
-				border-radius: 4px;
-				margin-top: 0.5rem;
-				border-left: 3px solid #ff5555;
-			}
-			
-			.error-icon {
-				margin-right: 0.5rem;
-				color: #ff5555;
-			}
-			
-			.error-content {
-				display: inline-block;
-				vertical-align: middle;
-			}
-			
-			.error-line {
-				margin: 0.25rem 0;
-				font-family: var(--font-monospace);
-				font-size: 0.9em;
-			}
+                background: var(--background-secondary);
+                padding: 0.5rem;
+                border-radius: 4px;
+                margin-top: 0.5rem;
+                border-left: 3px solid #ff5555;
+            }
+            .error-icon {
+                margin-right: 0.5rem;
+                color: #ff5555;
+            }
+            .error-content {
+                display: inline-block;
+                vertical-align: middle;
+            }
+            .error-line {
+                margin: 0.25rem 0;
+                font-family: var(--font-monospace);
+                font-size: 0.9em;
+            }
             .dlv-buttons {
                 display: flex;
                 gap: 0.5rem;
+                position: relative;
             }
-			.dlv-run-container {
-				gap: 4px;
-				margin-right: 12px;
-			}
-			.dlv-run-button {
-				color: var(--text-normal) !important;
-				transition: background-color 0.15s ease;
-			}
-			.dlv-run-button:hover {
-				background-color: var(--background-modifier-hover) !important;
-			}
-			.dlv-run-button svg {
-				flex-shrink: 0;
-			}
-			.dlv-button-text {
-				font-size: 0.85em;
-				position: relative;
-				bottom: 0.076rem;
-			}
-			@media (max-width: 400px) {
-				.dlv-button-text {
-					display: none;
-				}
-			}
-			.dlv-tooltip {
-				color: var(--text-muted);
-				font-size: 0.85em;
-			}
+            .dlv-run-container {
+                gap: 4px;
+                margin-right: 12px;
+            }
+            .dlv-run-button {
+                color: var(--text-normal) !important;
+                transition: background-color 0.15s ease;
+            }
+            .dlv-run-button:hover {
+                background-color: var(--background-modifier-hover) !important;
+            }
+            .dlv-run-button svg {
+                flex-shrink: 0;
+            }
+            .btn-text {
+                font-size: 0.85em;
+                position: relative;
+                bottom: 0.076rem;
+            }
+            .stop-btn {
+                color: #ff5555 !important;
+                display: none;
+            }
+            .spinner {
+                position: absolute;
+                left: 50%;
+                top: 50%;
+                transform: translate(-50%, -50%);
+                animation: spin 1s linear infinite;
+                display: none;
+            }
+            button.running .spinner {
+                display: block;
+            }
+            button.running .btn-text {
+                visibility: hidden;
+            }
+            @keyframes spin {
+                0% { transform: translate(-50%, -50%) rotate(0deg); }
+                100% { transform: translate(-50%, -50%) rotate(360deg); }
+            }
+            @media (max-width: 400px) {
+                .btn-text {
+                    display: none;
+                }
+            }
         `;
 		document.head.appendChild(this.stylesEl);
 	}
@@ -208,10 +252,11 @@ export default class DlvPlugin extends Plugin {
 		buttons.className = "dlv-buttons";
 
 		const runBtn = this.createButton("▶ Run", "run-btn");
+		const stopBtn = this.createButton("⏹ Stop", "stop-btn");
 		const saveBtn = this.createButton("💾 Save", "save-btn");
 		const copyBtn = this.createButton("📋 Copy", "copy-btn");
 
-		buttons.append(runBtn, saveBtn);
+		buttons.append(runBtn, stopBtn, saveBtn, copyBtn);
 		header.append(langLabel, buttons);
 
 		const outputPre = document.createElement("pre");
@@ -222,58 +267,77 @@ export default class DlvPlugin extends Plugin {
 	}
 
 	private createButton(text: string, className: string) {
-		const btn = document.createElement("button");
+		const btn = document.createElement("button") as HTMLButtonElement;
 		btn.className = className;
-		btn.textContent = text;
+		btn.innerHTML = `
+            <span class="btn-text">${text}</span>
+            <span class="spinner">
+                <svg viewBox="0 0 24 24" width="14" height="14">
+                    <path fill="currentColor" d="M12,4V2A10,10 0 0,0 2,12H4A8,8 0 0,1 12,4Z"/>
+                </svg>
+            </span>
+        `;
 		return btn;
 	}
 
-	async executeDlv(content: string, lang: string): Promise<{ stdout: string; stderr: string }> {
-		try {
-			// 1. Verifica esistenza file DLV
-			const dlvPath = this.getDlvPath();
-			await fs.access(dlvPath); // Lancia errore se non esiste
+	async executeDlv(content: string, lang: string, signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
+		const controller = new AbortController();
+		this.activeAbortControllers.add(controller);
+		if (signal) signal.onabort = () => controller.abort();
 
-			// 2. Crea file temporaneo
+		try {
+			const dlvPath = this.getDlvPath();
+			await fs.access(dlvPath);
+
 			const tmpDir = os.tmpdir();
-			await fs.mkdir(tmpDir, { recursive: true }); // Crea la cartella se non esiste
+			await fs.mkdir(tmpDir, { recursive: true });
 
 			const tmpFile = path.join(tmpDir, `dlv-temp-${Date.now()}.${lang}`);
-			await fs.writeFile(tmpFile, content, "utf8"); // Scrive il codice in un file temporaneo
+			await fs.writeFile(tmpFile, content, "utf8");
 
-			// 3. Esegui DLV
 			const args = [tmpFile];
 			if (this.settings.showAllModels) args.push("-n", "0");
 			if (this.settings.hideFacts) args.push("--no-facts");
 
-			const { stdout, stderr } = await execAsync(
+			// Aggiungi tipo esplicito per execPromise
+			const execPromise: Promise<{ stdout: string; stderr: string }> = execAsync(
 				`"${dlvPath}" ${args.map(arg => `"${arg}"`).join(" ")}`,
 				{
 					shell: process.platform === "win32" ? "cmd.exe" : undefined,
 					windowsHide: true,
-					encoding: 'utf-8'
+					encoding: 'utf-8',
+					signal: controller.signal
 				}
 			);
 
-			// 4. Pulizia file temporaneo
-			await fs.unlink(tmpFile).catch(() => {}); // Elimina il file temporaneo
+			// Definisci esplicitamente il tipo per result
+			let result: { stdout: string; stderr: string };
 
-			return {
-				stdout: this.cleanOutput(stdout),
-				stderr: this.cleanErrors(stderr)
-			};
-		} catch (error) {
-			// Gestione errori centralizzata
-			let errorMessage = "Errore sconosciuto";
-			if (error instanceof Error) {
-				errorMessage = error.message;
-				console.error("Errore executeDlv:", error);
+			if (this.settings.executionTimeout > 0) {
+				const timeoutPromise = new Promise<never>((_, reject) =>
+					setTimeout(() => reject(new Error("Execution timeout")), this.settings.executionTimeout)
+				);
+				result = await Promise.race([execPromise, timeoutPromise]);
+			} else {
+				result = await execPromise;
 			}
 
+			await fs.unlink(tmpFile).catch(() => {});
+			return {
+				stdout: this.cleanOutput(result.stdout),
+				stderr: this.cleanErrors(result.stderr)
+			};
+		} catch (error) {
+			let errorMessage = "Unknown error";
+			if (error instanceof Error) {
+				errorMessage = controller.signal.aborted ? "Execution aborted" : error.message;
+			}
 			return {
 				stdout: "",
 				stderr: errorMessage
 			};
+		} finally {
+			this.activeAbortControllers.delete(controller);
 		}
 	}
 
@@ -364,24 +428,29 @@ export default class DlvPlugin extends Plugin {
 		const timestamp = new Date().toLocaleString();
 		let content = `% ${timestamp}\n`;
 
-		if (result.stdout) {
+		const hasOutput = result.stdout.trim().length > 0;
+
+		// Aggiungi output se presente
+		if (hasOutput) {
 			content += "% AnswerSet\n" +
 				result.stdout.split('\n')
 					.map(line => `% ${line}`)
 					.join('\n');
 		}
 
-		if (this.settings.showErrors && result.stderr) {
+		// Aggiungi errori se rilevanti
+		if ((this.settings.showErrors || !hasOutput) && result.stderr) {
 			content += "\n% Errore\n" +
 				result.stderr.split('\n')
 					.map(line => `% ${line}`)
 					.join('\n');
 		}
 
-		const file = this.app.workspace.getActiveFile();
-		if (file) {
-			await this.app.vault.append(file, `\n\n${content.trim()}`);
-			new Notice("Risultato salvato nel file!");
+		if (this.app.workspace.getActiveFile()) {
+			await this.app.vault.append(
+				this.app.workspace.getActiveFile()!,
+				`\n\n${content.trim()}`
+			);
 		}
 	}
 
@@ -393,56 +462,67 @@ export default class DlvPlugin extends Plugin {
 		const titleBar = this.app.workspace.getLeaf().view.containerEl.querySelector(".view-header");
 		if (!titleBar) return;
 
-		// Rimuovi eventuali pulsanti precedenti
 		const actionsContainer = titleBar.querySelector(".view-actions") || titleBar.querySelector(".titlebar-button-container");
 		if (!actionsContainer) return;
 
-		// Rimuovi eventuali pulsanti precedenti
-		actionsContainer.querySelectorAll('.dlv-run-button').forEach(btn => btn.remove());
+		actionsContainer.querySelectorAll('.dlv-run-button, .dlv-stop-button').forEach(btn => btn.remove());
 
-		// Crea il pulsante
-		const runBtn = document.createElement("div");
+		const runBtn = document.createElement("div") as HTMLDivElement;
 		runBtn.className = "clickable-icon dlv-run-button";
 		runBtn.innerHTML = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" 
-             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="5 3 19 12 5 21 5 3"/>
-        </svg>
-        <span class="dlv-button-text">Run</span>
-    `;
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" 
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+            <span class="dlv-button-text">Run</span>
+            <span class="spinner" style="display: none;">
+                <svg viewBox="0 0 24 24" width="14" height="14">
+                    <path fill="currentColor" d="M12,4V2A10,10 0 0,0 2,12H4A8,8 0 0,1 12,4Z"/>
+                </svg>
+            </span>
+        `;
 
-		// Stile del pulsante
-		runBtn.style.cssText = `
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 8px;
-        margin: 0 2px;
-        border-radius: 4px;
-        position: relative;
-        top: -1px;
-    `;
+		const stopBtn = document.createElement("div") as HTMLDivElement;
+		stopBtn.className = "clickable-icon dlv-stop-button";
+		stopBtn.innerHTML = "⏹";
+		stopBtn.style.display = "none";
 
-		// Aggiungi hover effect
-		runBtn.addEventListener("mouseenter", () => {
-			runBtn.style.backgroundColor = "var(--background-modifier-hover)";
-		});
-		runBtn.addEventListener("mouseleave", () => {
-			runBtn.style.backgroundColor = "transparent";
-		});
+		let abortController: AbortController | null = null;
 
-		// Evento click
+		const toggleButtons = (running: boolean) => {
+			runBtn.style.display = running ? "none" : "flex";
+			stopBtn.style.display = running ? "flex" : "none";
+			(runBtn.querySelector('.spinner') as HTMLElement).style.display = running ? "block" : "none";
+			runBtn.querySelector('.dlv-button-text')!.textContent = running ? "Running" : "Run";
+		};
+
 		runBtn.onclick = async () => {
+			toggleButtons(true);
+			abortController = new AbortController();
+
 			try {
 				const content = await this.app.vault.read(file);
-				const result = await this.executeDlv(content, file.extension);
+				const result = await this.executeDlv(
+					content,
+					file.extension,
+					abortController.signal
+				);
 				await this.saveExecutionResult(result);
-			} catch (error) {
-				new Notice(`Errore: ${error instanceof Error ? error.message : "Errore sconosciuto"}`);
+			} finally {
+				toggleButtons(false);
+				abortController = null;
 			}
 		};
 
-		actionsContainer.insertBefore(runBtn, actionsContainer.firstChild);
+		stopBtn.onclick = () => {
+			if (abortController) {
+				abortController.abort();
+				toggleButtons(false);
+			}
+		};
+
+		actionsContainer.prepend(stopBtn);
+		actionsContainer.prepend(runBtn);
 	}
 
 	private markdownPostProcessor(element: HTMLElement, ctx: MarkdownPostProcessorContext) {
@@ -609,6 +689,7 @@ export default class DlvPlugin extends Plugin {
 	}
 
 	onunload() {
+		this.activeAbortControllers.forEach(controller => controller.abort());
 		this.stylesEl?.remove();
 	}
 }
@@ -672,6 +753,17 @@ class DlvSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+
+		new Setting(containerEl)
+			.setName('Execution Timeout')
+			.setDesc('Maximum execution time in milliseconds (0 = no timeout)')
+			.addText(text => text
+				.setValue(this.plugin.settings.executionTimeout.toString())
+				.onChange(async (value) => {
+					const numValue = Math.max(0, parseInt(value) || 0);
+					this.plugin.settings.executionTimeout = numValue;
+					await this.plugin.saveSettings();
+				}));
 
 		// Altre impostazioni
 		new Setting(containerEl)
