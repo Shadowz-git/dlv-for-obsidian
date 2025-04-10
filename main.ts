@@ -329,13 +329,26 @@ export default class DlvPlugin extends Plugin {
 	}
 
 	updateOutputUI(outputEl: HTMLElement, copyBtn: HTMLButtonElement, result: { stdout: string; stderr: string }) {
+		const hasOutput = result.stdout.trim().length > 0;
+		const hasErrors = result.stderr.trim().length > 0;
+
+		// Mostra output normale
 		outputEl.innerHTML = result.stdout.replace(/\n/g, "<br>");
 		outputEl.style.display = "block";
 
-		if (this.settings.showErrors && result.stderr) {
+		// Mostra errori se:
+		// 1. L'opzione è attiva OPPURE
+		// 2. Non c'è output ma ci sono errori
+		if ((this.settings.showErrors || !hasOutput) && hasErrors) {
 			const errorContent = this.cleanErrors(result.stderr)
 				.split('\n')
-				.map(line => `<div class="error-line"><b>${line.split(':')[0]}:</b> ${line.split(':').slice(1).join(':')}</div>`)
+				.map(line => {
+					const parts = line.split(':');
+					return `<div class="error-line">
+                    <b>${parts[0]}:</b> 
+                    ${parts.slice(1).join(':')}
+                </div>`;
+				})
 				.join('');
 
 			const errorEl = document.createElement("div");
