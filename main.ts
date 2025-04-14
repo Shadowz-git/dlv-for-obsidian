@@ -5,7 +5,7 @@ import {
 	Setting,
 	Notice,
 	MarkdownPostProcessorContext,
-	TFile, DropdownComponent
+	TFile, DropdownComponent, Modal
 
 } from "obsidian";
 import { exec } from "child_process";
@@ -43,6 +43,73 @@ const DEFAULT_SETTINGS: DlvPluginSettings = {
 	hideFacts: false,
 	cacheResults: true,
 };
+
+class NewScriptModal extends Modal {
+	plugin: any;
+
+	constructor(app: App, plugin: any) {
+		super(app);
+		this.plugin = plugin;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.empty();
+		contentEl.createEl('h2', { text: 'Crea Nuovo Script' });
+
+		// Campo di input per il nome del file
+		let fileName = "";
+		new Setting(contentEl)
+			.setName('Nome file')
+			.addText(text =>
+				text.setPlaceholder("Inserisci il nome del file")
+					.onChange(value => fileName = value)
+			);
+
+		// Dropdown per selezionare l'estensione dal setting customExtensions
+		let selectedExt = "";
+		new Setting(contentEl)
+			.setName('Estensione')
+			.addDropdown(dropdown => {
+				const extensions = this.plugin.settings.customExtensions
+					.split(',')
+					.map((ext: string) => ext.trim().toLowerCase())
+					.filter((ext: string) => ext.length > 0);
+				if (extensions.length) {
+					extensions.forEach((ext: string) => dropdown.addOption(ext, ext.toUpperCase()));
+					selectedExt = extensions[0];
+				}
+				dropdown.onChange(value => {
+					selectedExt = value;
+				});
+			});
+
+		// Pulsante di conferma per creare il file
+		new Setting(contentEl)
+			.addButton(button =>
+				button.setButtonText("Crea Script")
+					.onClick(async () => {
+						if (!fileName) {
+							new Notice("Inserisci un nome per il file!");
+							return;
+						}
+						const finalFileName = `${fileName}.${selectedExt}`;
+						try {
+							await this.plugin.app.vault.create(finalFileName, '');
+							new Notice(`File ${finalFileName} creato!`);
+						} catch (e) {
+							new Notice(`Errore nella creazione del file: ${e}`);
+						}
+						this.close();
+					})
+			);
+	}
+
+	onClose() {
+		const { contentEl } = this;
+		contentEl.empty();
+	}
+}
 
 class CodeBlockWidget extends WidgetType {
 	private abortController: AbortController | null = null;
@@ -142,6 +209,21 @@ export default class DlvPlugin extends Plugin {
 		if (extensions.length > 0) {
 			// @ts-ignore
 			this.registerExtensions(extensions, 'markdown');
+		}
+
+		this.registerNewScriptButton();
+	}
+
+	private registerNewScriptButton() {
+		const ribbonIconEl = this.addRibbonIcon('code', 'New Script', (evt: MouseEvent) => {
+			// Mostra una modale o un menu a tendina con le estensioni custom
+			new NewScriptModal(this.app, this).open();
+		});
+		// Aggiungi eventuali classi CSS per lo styling, se necessario
+		ribbonIconEl.addClass('new-script-ribbon-icon');
+
+		if (ribbonIconEl.parentElement) {
+			ribbonIconEl.parentElement.appendChild(ribbonIconEl);
 		}
 	}
 
@@ -495,7 +577,7 @@ export default class DlvPlugin extends Plugin {
 
 		const stopBtn = document.createElement("div") as HTMLDivElement;
 		stopBtn.className = "clickable-icon dlv-stop-button";
-		stopBtn.innerHTML = "⏹";
+		stopBtn.innerHTML = "⏹ Stop";
 		stopBtn.style.display = "none";
 
 		let abortController: AbortController | null = null;
@@ -623,7 +705,7 @@ export default class DlvPlugin extends Plugin {
 			}
 
 			// Debug
-			console.log("Percorso corretto del plugin:", this.pluginPath);
+			// console.log("Percorso corretto del plugin:", this.pluginPath);
 
 			await fs.mkdir(this.pluginPath, { recursive: true });
 
@@ -637,7 +719,7 @@ export default class DlvPlugin extends Plugin {
 		if (this.settings.dlvLocationType === "relative") {
 			// 5. Percorso eseguibili corretto
 			const executablesPath = path.join(this.pluginPath, "executables");
-			console.log("Percorso eseguibili:", executablesPath);
+			//console.log("Percorso eseguibili:", executablesPath);
 
 			try {
 				const files = await fs.readdir(executablesPath);
@@ -645,7 +727,7 @@ export default class DlvPlugin extends Plugin {
 					.filter(f => f.toLowerCase().includes('dlv'))
 					.map(f => path.join('executables', f));
 
-				console.log("Eseguibili trovati:", this.settings.availableExecutables);
+				//console.log("Eseguibili trovati:", this.settings.availableExecutables);
 
 			} catch (error) {
 				console.error("Errore scansione eseguibili:", error);
