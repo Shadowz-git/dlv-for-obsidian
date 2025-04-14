@@ -132,6 +132,17 @@ export default class DlvPlugin extends Plugin {
 		this.registerMarkdownPostProcessor(this.markdownPostProcessor.bind(this));
 		this.addSettingTab(new DlvSettingTab(this.app, this));
 		this.registerFileHeaderButtons();
+
+		// Aggiungi qui il nuovo codice
+		const extensions = this.settings.customExtensions
+			.split(',')
+			.map(ext => ext.trim().toLowerCase())
+			.filter(ext => ext.length > 0);
+
+		if (extensions.length > 0) {
+			// @ts-ignore
+			this.registerExtensions(extensions, 'markdown');
+		}
 	}
 
 	private registerFileHeaderButtons() {
