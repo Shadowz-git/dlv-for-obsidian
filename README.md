@@ -2,6 +2,12 @@
 ## Dlv For ASP Resolver
 
 ### Installation
+### From Release
+1. Download the latest release, the name is 'dlv-for-obsidian.zip'.
+2. Extract the zip, manteining the folder 'dlv-for-obsidian' and all the files inside, ininside where your vault is.  Exampe: *'myVault/.obsidian/plugins/
+3. 3. Start/Restart Obsidian.
+4. Go in the *Obsidian Settings* -> *Community Plugins*, and activate **DLV in Obsidian**.
+
 #### Manually
 
 **Prerequisites: ** Having Node Package Manager installed.
