@@ -29,13 +29,14 @@ jobs:
 
       - name: Create plugin zip
         run: |
-          mkdir dist
-          zip -r dist/dlv-for-asp-resolver.zip main.js manifest.json styles.css executables/
+          mkdir -p dist
+          VERSION=${GITHUB_REF_NAME}
+          zip -r dist/dlv-for-obsidian.zip main.js manifest.json executables/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: dist/obsidian-my-plugin.zip
+          files: dist/dlv-for-obsidian.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
