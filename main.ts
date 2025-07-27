@@ -1,21 +1,22 @@
 import {
 	App,
+	DropdownComponent,
+	MarkdownPostProcessorContext,
+	Modal,
+	Notice,
 	Plugin,
 	PluginSettingTab,
 	Setting,
-	Notice,
-	MarkdownPostProcessorContext,
-	TFile, DropdownComponent, Modal
-
+	TFile
 } from "obsidian";
-import { exec } from "child_process";
-import { RangeSetBuilder } from "@codemirror/state";
+import {exec} from "child_process";
+import {RangeSetBuilder} from "@codemirror/state";
 import {Decoration, EditorView, WidgetType} from "@codemirror/view";
 import * as path from "path";
-import { promises as fs } from "fs";
+import {promises as fs} from "fs";
 import * as os from "os";
-import {ChildProcess} from "child_process";
-import { promisify } from "util";
+import {promisify} from "util";
+
 const execAsync = promisify(exec);
 
 interface DlvPluginSettings {
@@ -55,14 +56,14 @@ class NewScriptModal extends Modal {
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.empty();
-		contentEl.createEl('h2', { text: 'Crea Nuovo Script' });
+		contentEl.createEl('h2', { text: 'Create a New Script' });
 
 		// Campo di input per il nome del file
 		let fileName = "";
 		new Setting(contentEl)
-			.setName('Nome file')
+			.setName('File Name')
 			.addText(text =>
-				text.setPlaceholder("Inserisci il nome del file")
+				text.setPlaceholder("Enter a name for the file")
 					.onChange(value => fileName = value)
 			);
 
@@ -87,18 +88,18 @@ class NewScriptModal extends Modal {
 		// Pulsante di conferma per creare il file
 		new Setting(contentEl)
 			.addButton(button =>
-				button.setButtonText("Crea Script")
+				button.setButtonText("Create Script")
 					.onClick(async () => {
 						if (!fileName) {
-							new Notice("Inserisci un nome per il file!");
+							new Notice("Enter a name for the file!");
 							return;
 						}
 						const finalFileName = `${fileName}.${selectedExt}`;
 						try {
 							await this.plugin.app.vault.create(finalFileName, '');
-							new Notice(`File ${finalFileName} creato!`);
+							new Notice(`File ${finalFileName} created!`);
 						} catch (e) {
-							new Notice(`Errore nella creazione del file: ${e}`);
+							new Notice(`Error creating file: ${e}`);
 						}
 						this.close();
 					})
@@ -394,9 +395,9 @@ export default class DlvPlugin extends Plugin {
 
 			// Aggiungi tipo esplicito per execPromise
 			const execPromise: Promise<{ stdout: string; stderr: string }> = execAsync(
-				`"${dlvPath}" ${args.map(arg => `"${arg}"`).join(" ")}`,
+				`${dlvPath} --t ${args.map(arg => arg).join(" ")}`,
 				{
-					shell: process.platform === "win32" ? "cmd.exe" : undefined,
+					shell: process.platform === "win32" ? "cmd.exe" : "/bin/bash",
 					windowsHide: true,
 					encoding: 'utf-8',
 					signal: controller.signal
@@ -502,7 +503,7 @@ export default class DlvPlugin extends Plugin {
 				.map(line => {
 					const parts = line.split(':');
 					return `<div class="error-line">
-                    <b>${parts[0]}:</b> 
+                    <b>${parts[0]}:</b>
                     ${parts.slice(1).join(':')}
                 </div>`;
 				})
@@ -563,7 +564,7 @@ export default class DlvPlugin extends Plugin {
 		const runBtn = document.createElement("div") as HTMLDivElement;
 		runBtn.className = "clickable-icon dlv-run-button";
 		runBtn.innerHTML = `
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" 
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none"
                 stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polygon points="5 3 19 12 5 21 5 3"/>
             </svg>
@@ -768,12 +769,12 @@ export default class DlvPlugin extends Plugin {
 			const fullPath = path.join(this.pluginPath, this.settings.relativeExecutable);
 
 			if (!await fs.access(fullPath).then(() => true).catch(() => false)) {
-				new Notice('⚠️ Eseguibile non trovato nel percorso relativo!');
+				new Notice('⚠️ Executable not found in relative path!');
 				return;
 			}
 		} else {
 			if (!await fs.access(this.settings.absolutePath).then(() => true).catch(() => false)) {
-				new Notice('⚠️ Percorso assoluto non valido!');
+				new Notice('⚠️ Absolute invalid path!');
 				return;
 			}
 		}
@@ -841,7 +842,7 @@ class DlvSettingTab extends PluginSettingTab {
 				});
 				dropdown
 					.setValue(this.plugin.settings.relativeExecutable)
-					.onChange(async (value) => {
+					.onChange(async (value: string) => {
 						this.plugin.settings.relativeExecutable = value;
 						await this.plugin.saveSettings();
 					});
@@ -853,8 +854,7 @@ class DlvSettingTab extends PluginSettingTab {
 			.addText(text => text
 				.setValue(this.plugin.settings.executionTimeout.toString())
 				.onChange(async (value) => {
-					const numValue = Math.max(0, parseInt(value) || 0);
-					this.plugin.settings.executionTimeout = numValue;
+					this.plugin.settings.executionTimeout = Math.max(0, parseInt(value) || 0);
 					await this.plugin.saveSettings();
 				}));
 
