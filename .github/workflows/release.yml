@@ -30,7 +30,7 @@ jobs:
       - name: Create plugin zip
         run: |
           mkdir dist
-          zip -r dist/obsidian-my-plugin.zip main.js manifest.json styles.css executables/
+          zip -r dist/dlv-for-asp-resolver.zip main.js manifest.json styles.css executables/
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
