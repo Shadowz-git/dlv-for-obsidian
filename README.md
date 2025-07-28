@@ -7,8 +7,8 @@
 ### Installation
 ### From Release
 1. Download the latest release, the name is 'dlv-for-obsidian.zip'.
-2. Extract the zip, manteining the folder 'dlv-for-obsidian' and all the files inside, ininside where your vault is.  Exampe: *'myVault/.obsidian/plugins/
-3. 3. Start/Restart Obsidian.
+2. Extract the zip, manteining the folder 'dlv-for-obsidian' and all the files inside, inside where your vault is.  Exampe: 'myVault/.obsidian/plugins/'
+3. Start/Restart Obsidian.
 4. Go in the *Obsidian Settings* -> *Community Plugins*, and activate **DLV in Obsidian**.
 
 ----
@@ -33,6 +33,8 @@
 ---
 
 ### Settings
+<img width="581" height="439" alt="image" src="https://github.com/user-attachments/assets/2fec748f-465b-4666-8456-98aba5d3c2cc" />
+
 - #### Installation Type
   - Default: Relative to Plugin, the reason is, there is already a 'executables' folder with 4 differents version of DLV (macOS arm64, macOS 64, linux and windows).
 
