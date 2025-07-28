@@ -28,12 +28,20 @@
 ### Features
 - Execute ASP inside Obsidian, using the selected DLV in the plugin settings.
 - Button to create ASP (or selected languages) scripts. You can execute single scripts, and the result will be added in the end of the script in the form of a comment.
-- Execute code blocks (with selected languages).
+  <img width="540" height="360" alt="image" src="https://github.com/user-attachments/assets/cc3cdeb2-211e-4083-a130-2757044409b9" />
+
+- Execute code blocks (with selected languages) (Example: ASP and dlv extensions).
+  <img width="1070" height="360" alt="image" src="https://github.com/user-attachments/assets/24559210-bebe-4430-ab0f-fbad50ce25df" />
+  <img width="1070" height="360" alt="image" src="https://github.com/user-attachments/assets/eea3035a-4f13-4047-ac02-725e6dab0efb" />
+
+- Warnings
+  <img width="1070" height="360" alt="image" src="https://github.com/user-attachments/assets/bdb0d474-3f7f-4f29-bf02-4c9625636ddb" />
+
 
 ---
 
 ### Settings
-<img width="581" height="439" alt="image" src="https://github.com/user-attachments/assets/2fec748f-465b-4666-8456-98aba5d3c2cc" />
+<img width="540" height="360" alt="image" src="https://github.com/user-attachments/assets/2fec748f-465b-4666-8456-98aba5d3c2cc" />
 
 - #### Installation Type
   - Default: Relative to Plugin, the reason is, there is already a 'executables' folder with 4 differents version of DLV (macOS arm64, macOS 64, linux and windows).
